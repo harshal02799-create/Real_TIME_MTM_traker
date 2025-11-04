@@ -1,0 +1,9 @@
+pandas
+numpy
+plotly
+dash
+streamlit
+tradingview-screener
+gspread
+oauth2client
+openpyxl
