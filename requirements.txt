@@ -7,3 +7,4 @@ tradingview-screener
 gspread
 oauth2client
 openpyxl
+gunicorn
