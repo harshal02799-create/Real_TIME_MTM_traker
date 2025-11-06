@@ -667,7 +667,15 @@ if uploaded_live is not None:
         elif name.endswith(".csv"):
             df_live = pd.read_csv(io.StringIO(file_bytes.decode("utf-8")), sep=",", engine="python")
         elif name.endswith(".xls") or name.endswith(".xlsx"):
-            df_live = pd.read_excel(io.BytesIO(file_bytes))
+            # 🔧 FIX: handle Excel masquerading as TSV
+            try:
+                df_live = pd.read_excel(io.BytesIO(file_bytes), engine="xlrd")
+            except Exception:
+                try:
+                    df_live = pd.read_excel(io.BytesIO(file_bytes), engine="openpyxl")
+                except Exception:
+                    # fallback: if Excel fails, read as TSV (most broker .xls files are TSV)
+                    df_live = pd.read_csv(io.StringIO(file_bytes.decode("utf-8")), sep="\t", engine="python")
         else:
             df_live = pd.DataFrame()
 
@@ -676,6 +684,9 @@ if uploaded_live is not None:
 
     except Exception as e:
         st.sidebar.error(f"❌ Failed to read live file: {e}")
+
+else:
+    st.sidebar.info("⬆️ Upload your live NetPosition file to start MTM tracking.")
 
 # Refresh Interval
 st.session_state["refresh_interval"] = st.sidebar.number_input(
