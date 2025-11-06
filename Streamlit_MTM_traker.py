@@ -1,13 +1,586 @@
+# import os
+# import io
+# import time
+# from datetime import datetime
+# from typing import List, Optional
+#
+# import pandas as pd
+# import numpy as np
+# import streamlit as st
+# import plotly.graph_objects as go
+# import pytz
+# IST = pytz.timezone("Asia/Kolkata")
+#
+# # Optional: TradingView LTP fetch
+# try:
+#     from tradingview_screener import Query
+#     TV_AVAILABLE = True
+# except Exception:
+#     TV_AVAILABLE = False
+#
+# # Optional autorefresh
+# try:
+#     from streamlit_autorefresh import st_autorefresh
+#     AUTOREFRESH_AVAILABLE = True
+# except Exception:
+#     AUTOREFRESH_AVAILABLE = False
+#
+# # -----------------------------
+# # CONFIG (change base_dir as required)
+# # -----------------------------
+# DEFAULT_BASE_DIR = r"C:\Users\freedom\Desktop\ORDER B005\backup\GETS_FILES\GETS_EXCEL"
+# FILE_NAME = "NetPositionAutoBackup.xls"   # fixed file name in dated folder (DDMon)
+# DEFAULT_REFRESH_INTERVAL = 5  # seconds
+#
+# # -----------------------------
+# # PAGE SETUP
+# # -----------------------------
+# st.set_page_config(page_title="📊 Live MTM Dashboard", layout="wide")
+# st.title("📊 Live MTM Dashboard")
+#
+# # -----------------------------
+# # SESSION STATE INIT
+# # -----------------------------
+# if "csv_df" not in st.session_state:
+#     st.session_state["csv_df"] = pd.DataFrame()
+# if "csv_uploaded" not in st.session_state:
+#     st.session_state["csv_uploaded"] = False
+# if "live_upload_df" not in st.session_state:
+#     st.session_state["live_upload_df"] = pd.DataFrame()
+# if "use_local_live" not in st.session_state:
+#     st.session_state["use_local_live"] = True
+# if "base_dir" not in st.session_state:
+#     st.session_state["base_dir"] = DEFAULT_BASE_DIR
+# if "refresh_interval" not in st.session_state:
+#     st.session_state["refresh_interval"] = DEFAULT_REFRESH_INTERVAL
+# if "last_local_mtime" not in st.session_state:
+#     st.session_state["last_local_mtime"] = None
+# if "merged_df" not in st.session_state:
+#     st.session_state["merged_df"] = pd.DataFrame()
+# if "history" not in st.session_state:
+#     st.session_state["history"] = []  # list of snapshots
+# if "selected_user" not in st.session_state:
+#     st.session_state["selected_user"] = "-- All --"
+# if "selected_strategy" not in st.session_state:
+#     st.session_state["selected_strategy"] = "-- All --"
+#
+# # -----------------------------
+# # SIDEBAR: Uploads & Settings
+# # -----------------------------
+# st.sidebar.header("Files & Settings")
+#
+# # Portfolio upload (CSV or Excel) — one time
+# uploaded_portfolio = st.sidebar.file_uploader("📂 Upload Portfolio (CSV or XLS/XLSX)", type=["csv", "xls", "xlsx"])
+# if uploaded_portfolio is not None and not st.session_state["csv_uploaded"]:
+#     # read uploaded file into df
+#     try:
+#         name = uploaded_portfolio.name.lower()
+#         bytes_data = uploaded_portfolio.read()
+#         if name.endswith(".csv"):
+#             df_csv = pd.read_csv(io.StringIO(bytes_data.decode("utf-8")), engine="python")
+#         else:
+#             df_csv = pd.read_excel(io.BytesIO(bytes_data))
+#         st.session_state["csv_df"] = df_csv.copy()
+#         st.session_state["csv_uploaded"] = True
+#         st.sidebar.success(f"Portfolio loaded: {uploaded_portfolio.name} ({len(df_csv)} rows)")
+#
+#         # Ensure Strategy column
+#         if "Strategy" not in st.session_state["csv_df"].columns:
+#             st.session_state["csv_df"]["Strategy"] = st.session_state["csv_df"].get("NetVal", 0).apply(
+#                 lambda x: "CIRCUIT" if pd.notna(x) and float(x) > 425000 else "CHART"
+#             )
+#         else:
+#             st.session_state["csv_df"]["Strategy"] = st.session_state["csv_df"]["Strategy"].fillna("").astype(str)
+#             blank_mask = st.session_state["csv_df"]["Strategy"].str.strip() == ""
+#             if blank_mask.any():
+#                 st.session_state["csv_df"].loc[blank_mask, "Strategy"] = st.session_state["csv_df"].loc[blank_mask, "NetVal"].apply(
+#                     lambda x: "CIRCUIT" if pd.notna(x) and float(x) > 425000 else "CHART"
+#                 )
+#
+#         # Ensure Nse_close exists
+#         if "Nse_close" not in st.session_state["csv_df"].columns:
+#             st.session_state["csv_df"]["Nse_close"] = 0.0
+#
+#     except Exception as e:
+#         st.sidebar.error(f"Failed to read portfolio: {e}")
+#
+# # Live-trades (NetPosition) upload OR local mode
+# st.sidebar.markdown("### Live Trades Source")
+# live_mode = st.sidebar.radio("Select live trades source", ("Auto-read local file", "Upload live trades file"))
+# if live_mode == "Auto-read local file":
+#     st.session_state["use_local_live"] = True
+# else:
+#     st.session_state["use_local_live"] = False
+#
+# if st.session_state["use_local_live"]:
+#     st.sidebar.text_input("Base folder for daily folders", value=st.session_state["base_dir"], key="base_dir")
+#     st.sidebar.markdown(f"Looking for `{FILE_NAME}` inside folder like `DDMon` (e.g. 04Nov) under base_dir.")
+# else:
+#     uploaded_live = st.sidebar.file_uploader("📤 Upload live NetPosition (XLS/XLSX/TSV)", type=["xls", "xlsx", "csv", "tsv"])
+#     if uploaded_live is not None:
+#         try:
+#             name = uploaded_live.name.lower()
+#             b = uploaded_live.read()
+#
+#             # Try reading based on file type and content
+#             if name.endswith(".csv"):
+#                 df_live = pd.read_csv(io.StringIO(b.decode("utf-8")), sep=",", engine="python")
+#             elif name.endswith(".tsv"):
+#                 df_live = pd.read_csv(io.StringIO(b.decode("utf-8")), sep="\t", engine="python")
+#             elif name.endswith(".xls") or name.endswith(".xlsx"):
+#                 # Try multiple Excel engines, fallback to TSV if needed
+#                 try:
+#                     df_live = pd.read_excel(io.BytesIO(b), engine="xlrd")
+#                 except Exception:
+#                     try:
+#                         df_live = pd.read_excel(io.BytesIO(b), engine="openpyxl")
+#                     except Exception:
+#                         # If it’s actually a TSV saved as .xls
+#                         df_live = pd.read_csv(io.StringIO(b.decode("utf-8")), sep="\t", engine="python")
+#             else:
+#                 raise ValueError("Unsupported file type")
+#
+#             st.session_state["live_upload_df"] = df_live.copy()
+#             st.sidebar.success(f"Live trades uploaded: {uploaded_live.name} ({len(df_live)} rows)")
+#
+#         except Exception as e:
+#             st.sidebar.error(f"Failed to read live trades upload: {e}")
+#
+# # Refresh interval
+# st.session_state["refresh_interval"] = st.sidebar.number_input("Refresh interval (seconds)", min_value=1, max_value=60, value=st.session_state["refresh_interval"], step=1)
+#
+# st.sidebar.markdown("---")
+# st.sidebar.write("LTP source:", "TradingView (Query)" if TV_AVAILABLE else "Unavailable — uses NetPrice")
+#
+# # -----------------------------
+# # Helper: load local live file
+# # -----------------------------
+# def load_local_live(base_dir: str, file_name: str) -> pd.DataFrame:
+#     folder = os.path.join(base_dir, datetime.now(IST).strftime("%d%b"))
+#     fpath = os.path.join(folder, file_name)
+#     if not os.path.exists(fpath):
+#         return pd.DataFrame()
+#     # attempt excel -> fallback to csv/tsv
+#     try:
+#         df = pd.read_excel(fpath, engine="xlrd")
+#         return df
+#     except Exception:
+#         try:
+#             df = pd.read_csv(fpath, sep="\t", engine="python")
+#             return df
+#         except Exception:
+#             try:
+#                 df = pd.read_excel(fpath, engine="openpyxl")
+#                 return df
+#             except Exception:
+#                 return pd.DataFrame()
+#
+# # -----------------------------
+# # Helper: fetch LTP (cached)
+# # -----------------------------
+# def fetch_ltp(symbols: List[str]) -> pd.DataFrame:
+#     """Always fetch fresh LTP from TradingView (no cache)."""
+#     if not TV_AVAILABLE or not symbols:
+#         return pd.DataFrame(columns=["Symbol", "LTP"])
+#     try:
+#         _, tv = (
+#             Query()
+#             .select("name", "exchange", "close")
+#             .set_markets("india")
+#             .limit(9000)
+#             .get_scanner_data()
+#         )
+#         tv = tv.rename(columns={"name": "Symbol", "close": "LTP"})
+#         tv = tv.drop_duplicates(subset=["Symbol"], keep="first")
+#         tv["LTP"] = pd.to_numeric(tv["LTP"], errors="coerce").fillna(0.0).round(2)
+#         tv = tv[tv["Symbol"].isin(symbols)][["Symbol", "LTP"]]
+#         tv["Timestamp"] = datetime.now(IST).strftime("%H:%M:%S")
+#         return tv
+#     except Exception as e:
+#         st.warning(f"LTP fetch failed: {e}")
+#         return pd.DataFrame(columns=["Symbol", "LTP"])
+#
+# # -----------------------------
+# # Merge logic (CSV + Live)
+# # -----------------------------
+# def merge_local_csv(df_tsv: pd.DataFrame, df_csv: pd.DataFrame) -> pd.DataFrame:
+#     # Ensure required columns exist
+#     for col in ["User", "Exchange", "Strategy", "Symbol", "Ser_Exp", "NetQty", "NetVal"]:
+#         if col not in df_csv.columns:
+#             df_csv[col] = "" if col not in ["NetQty", "NetVal"] else 0.0
+#         if col not in df_tsv.columns:
+#             df_tsv[col] = "" if col not in ["NetQty", "NetVal"] else 0.0
+#
+#     # Strategy fill for CSV
+#     if "Strategy" not in df_csv.columns:
+#         df_csv["Strategy"] = df_csv.get("NetVal", 0).apply(lambda x: "CIRCUIT" if pd.notna(x) and float(x) > 425000 else "CHART")
+#     else:
+#         df_csv["Strategy"] = df_csv["Strategy"].fillna("").astype(str)
+#         blank_mask = df_csv["Strategy"].str.strip() == ""
+#         if blank_mask.any():
+#             df_csv.loc[blank_mask, "Strategy"] = df_csv.loc[blank_mask, "NetVal"].apply(lambda x: "CIRCUIT" if pd.notna(x) and float(x) > 425000 else "CHART")
+#
+#     # If no TSV/live -> return CSV-only (compute NetPrice)
+#     if df_tsv is None or df_tsv.empty:
+#         merged = df_csv.copy()
+#         merged["NetQty"] = pd.to_numeric(merged.get("NetQty", 0), errors="coerce").fillna(0.0)
+#         merged["NetVal"] = pd.to_numeric(merged.get("NetVal", 0), errors="coerce").fillna(0.0)
+#         merged["NetPrice"] = merged.apply(lambda r: (r.NetVal / r.NetQty) if r.NetQty else 0.0, axis=1)
+#         merged = merged[merged["NetQty"] != 0].reset_index(drop=True)
+#         return merged
+#
+#     # concat & aggregate
+#     # Ensure NetPrice may exist; if not compute later
+#     cols_needed = ["User","Exchange","Strategy","Symbol","Ser_Exp","NetQty","NetVal"]
+#     concat = pd.concat([
+#         df_csv[cols_needed].copy(),
+#         df_tsv[cols_needed].copy()
+#     ], ignore_index=True, sort=False)
+#
+#     concat["NetQty"] = pd.to_numeric(concat["NetQty"], errors="coerce").fillna(0.0)
+#     concat["NetVal"] = pd.to_numeric(concat["NetVal"], errors="coerce").fillna(0.0)
+#
+#     grouped = concat.groupby(["User","Exchange","Symbol","Ser_Exp"], as_index=False).agg({"NetQty":"sum","NetVal":"sum"})
+#     grouped["NetPrice"] = grouped.apply(lambda r: (r.NetVal / r.NetQty) if r.NetQty else 0.0, axis=1)
+#     grouped = grouped[grouped["NetQty"] != 0].reset_index(drop=True)
+#
+#     # Strategy: prefer CSV strategy if symbol present in csv
+#     csv_strategy_map = df_csv.set_index("Symbol")["Strategy"].to_dict()
+#     def decide_strategy(sym, nv):
+#         s = csv_strategy_map.get(sym, None)
+#         if s is not None and str(s).strip() != "":
+#             return s
+#         return "CIRCUIT" if pd.notna(nv) and float(nv) > 425000 else "CHART"
+#     grouped["Strategy"] = grouped.apply(lambda r: decide_strategy(r["Symbol"], r["NetVal"]), axis=1)
+#
+#     return grouped
+#
+# def merge_and_adjust(df_tsv: pd.DataFrame, df_csv: pd.DataFrame) -> pd.DataFrame:
+#     merged = merge_local_csv(df_tsv, df_csv)
+#
+#     # Bring Close from CSV (Nse_close)
+#     if "Nse_close" not in df_csv.columns:
+#         df_csv["Nse_close"] = 0.0
+#     close_map = df_csv[["Symbol","Nse_close"]].rename(columns={"Nse_close":"Close"})
+#     merged = pd.merge(merged, close_map, on="Symbol", how="left").fillna({"Close": 0.0})
+#
+#     # Fetch LTP (or fallback)
+#     symbols = merged["Symbol"].dropna().unique().tolist()
+#     ltp_df = fetch_ltp(symbols)
+#     if not ltp_df.empty:
+#         merged = pd.merge(merged, ltp_df, on="Symbol", how="left").fillna({"LTP":0.0})
+#     else:
+#         merged["LTP"] = merged["NetPrice"].astype(float)
+#
+#     # Numeric coercion
+#     for c in ["NetQty","NetVal","NetPrice","Close","LTP"]:
+#         if c in merged.columns:
+#             merged[c] = pd.to_numeric(merged[c], errors="coerce").fillna(0.0)
+#
+#     # MTM metrics
+#     merged["MTM"] = (merged["LTP"] - merged["NetPrice"]) * merged["NetQty"]
+#     merged["MTM %"] = merged.apply(lambda r: (r["MTM"] / r["NetVal"] * 100) if r["NetVal"] else 0.0, axis=1)
+#     merged["Diff_MTM"] = (merged["LTP"] - merged["Close"]) * merged["NetQty"]
+#     merged["Diff_MTM %"] = merged.apply(lambda r: (r["Diff_MTM"] / r["NetVal"] * 100) if r["NetVal"] else 0.0, axis=1)
+#
+#     # Round numeric columns to 2 decimals
+#     numeric_cols = ["NetQty","NetVal","NetPrice","Close","LTP","MTM","MTM %","Diff_MTM","Diff_MTM %"]
+#     for c in numeric_cols:
+#         if c in merged.columns:
+#             merged[c] = pd.to_numeric(merged[c], errors="coerce").fillna(0.0).round(2)
+#
+#     # Add TOTAL row
+#     total_row = {
+#         "User":"TOTAL",
+#         "Exchange":"",
+#         "Strategy":"",
+#         "Symbol":"",
+#         "Ser_Exp":"",
+#         "NetQty": merged["NetQty"].sum(),
+#         "NetVal": merged["NetVal"].sum(),
+#         "NetPrice":"",
+#         "Close":"",
+#         "LTP":"",
+#         "MTM": merged["MTM"].sum(),
+#         "MTM %": (merged["MTM"].sum() / merged["NetVal"].sum() * 100) if merged["NetVal"].sum() else 0.0,
+#         "Diff_MTM": merged["Diff_MTM"].sum(),
+#         "Diff_MTM %": (merged["Diff_MTM"].sum() / merged["NetVal"].sum() * 100) if merged["NetVal"].sum() else 0.0
+#     }
+#     merged = pd.concat([merged, pd.DataFrame([total_row])], ignore_index=True)
+#
+#     # Reorder for display
+#     col_order = ["User","Strategy","Exchange","Symbol","Ser_Exp","NetQty","NetVal","NetPrice","Close","LTP","MTM","MTM %","Diff_MTM","Diff_MTM %"]
+#     merged = merged[[c for c in col_order if c in merged.columns]]
+#
+#     merged = merged.fillna("")
+#     return merged
+#
+# # -----------------------------
+# # Utilities for UI formatting
+# # -----------------------------
+# def color_text_html(val):
+#     try:
+#         v = float(val)
+#     except Exception:
+#         return f"{val}"
+#     color = "#00FF00" if v >= 0 else "#FF4C4C"
+#     return f"<span style='color:{color}; font-weight:bold'>{v:,.2f}</span>"
+#
+# def style_pos_neg(series):
+#     try:
+#         s = pd.to_numeric(series, errors="coerce").fillna(0.0)
+#     except Exception:
+#         return ["color:white"] * len(series)
+#     return ["color:limegreen" if v > 0 else ("color:red" if v < 0 else "color:white") for v in s]
+#
+# # -----------------------------
+# # MAIN: Auto-read or use upload, merge, display
+# # -----------------------------
+# status_col, action_col = st.columns([3,1])
+# with status_col:
+#     ts = datetime.now(IST).strftime("%H:%M:%S")
+#     st.markdown(f"**Last check:** {ts} — Live file mode: **{'Local Auto' if st.session_state['use_local_live'] else 'Uploaded Live'}**")
+#
+# # Load CSV (must be uploaded)
+# if not st.session_state["csv_uploaded"]:
+#     st.warning("Upload a Portfolio file in the sidebar to start the dashboard (CSV or XLS/XLSX).")
+# else:
+#     # Determine live-source DataFrame
+#     df_live = pd.DataFrame()
+#     if st.session_state["use_local_live"]:
+#         # try read local file path every refresh interval if changed
+#         base_dir = st.session_state["base_dir"]
+#         folder = os.path.join(base_dir, datetime.now(IST).strftime("%d%b"))
+#         fpath = os.path.join(folder, FILE_NAME)
+#         if os.path.exists(fpath):
+#             mtime = os.path.getmtime(fpath)
+#             # reload on change or first time
+#             if st.session_state["last_local_mtime"] != mtime or st.session_state["merged_df"].empty:
+#                 try:
+#                     df_live = load_local_live(base_dir, FILE_NAME)
+#                     st.session_state["last_local_mtime"] = mtime
+#                 except Exception as e:
+#                     st.error(f"Failed reading local live file: {e}")
+#                     df_live = pd.DataFrame()
+#             else:
+#                 # use previous merged_df's live portion (no reload)
+#                 df_live = pd.DataFrame()  # handled by merge logic expecting empty -> csv-only
+#         else:
+#             df_live = pd.DataFrame()
+#     else:
+#         # use uploaded live from session_state (if any)
+#         df_live = st.session_state.get("live_upload_df", pd.DataFrame())
+#
+#     # Merge
+#     try:
+#         merged_df = merge_and_adjust(df_live, st.session_state["csv_df"])
+#         st.session_state["merged_df"] = merged_df.copy()
+#         # update history snapshot (use TOTAL row)
+#         if not merged_df.empty and "User" in merged_df.columns and "TOTAL" in merged_df["User"].values:
+#             total = merged_df[merged_df["User"] == "TOTAL"].iloc[0]
+#             snap = {
+#                 "Time": datetime.now(IST).strftime("%H:%M:%S"),
+#                 "MTM": float(total.get("MTM") or 0.0),
+#                 "Diff_MTM": float(total.get("Diff_MTM") or 0.0),
+#                 "MTM %": float(total.get("MTM %") or 0.0),
+#                 "Diff_MTM %": float(total.get("Diff_MTM %") or 0.0)
+#             }
+#             st.session_state["history"].append(snap)
+#             if len(st.session_state["history"]) > 400:
+#                 st.session_state["history"] = st.session_state["history"][-400:]
+#     except Exception as e:
+#         st.error(f"Merging error: {e}")
+#         merged_df = pd.DataFrame()
+#
+#     # DISPLAY UI: tabs
+#     merged_display = st.session_state["merged_df"].copy() if not st.session_state["merged_df"].empty else pd.DataFrame()
+#     history_df = pd.DataFrame(st.session_state["history"])
+#
+#     tab1, tab2, tab3 = st.tabs(["📈 Dashboard", "👤 User Summary", "📊 Strategy Stats"])
+#
+#     # --- TAB 1: Dashboard ---
+#     with tab1:
+#         st.markdown("### Dashboard")
+#         if merged_display.empty:
+#             st.info("No merged data yet.")
+#         else:
+#             # total row detection
+#             total_row = None
+#             if "User" in merged_display.columns and "TOTAL" in merged_display["User"].values:
+#                 total_row = merged_display[merged_display["User"] == "TOTAL"].iloc[0]
+#             elif "Strategy" in merged_display.columns and "TOTAL" in merged_display["Strategy"].values:
+#                 total_row = merged_display[merged_display["Strategy"] == "TOTAL"].iloc[0]
+#
+#             if total_row is not None:
+#                 net_val = float(total_row.get("NetVal") or 0.0)
+#                 mtm = float(total_row.get("MTM") or 0.0)
+#                 mtm_pct = float(total_row.get("MTM %") or 0.0)
+#                 diff_mtm = float(total_row.get("Diff_MTM") or 0.0)
+#                 diff_mtm_pct = float(total_row.get("Diff_MTM %") or 0.0)
+#
+#                 st.markdown(
+#                     f"""
+#                     <div style="display:flex; gap:8px; margin-bottom:10px;">
+#                         <div style="flex:1; background:#0b0b0b; padding:12px; border-radius:8px; text-align:center;">
+#                           <div style="color:#bbb; font-size:12px;">Holding Value</div>
+#                           <div style="font-size:18px; font-weight:bold; color:white;">{net_val:,.2f}</div>
+#                         </div>
+#                         <div style="flex:1; background:#0b0b0b; padding:12px; border-radius:8px; text-align:center;">
+#                           <div style="color:#bbb; font-size:12px;">MTM</div>
+#                           <div style="font-size:18px; font-weight:bold;">{color_text_html(mtm)}</div>
+#                         </div>
+#                         <div style="flex:1; background:#0b0b0b; padding:12px; border-radius:8px; text-align:center;">
+#                           <div style="color:#bbb; font-size:12px;">MTM %</div>
+#                           <div style="font-size:18px; font-weight:bold;">{color_text_html(mtm_pct)}</div>
+#                         </div>
+#                         <div style="flex:1; background:#0b0b0b; padding:12px; border-radius:8px; text-align:center;">
+#                           <div style="color:#bbb; font-size:12px;">Diff MTM</div>
+#                           <div style="font-size:18px; font-weight:bold;">{color_text_html(diff_mtm)}</div>
+#                         </div>
+#                         <div style="flex:1; background:#0b0b0b; padding:12px; border-radius:8px; text-align:center;">
+#                           <div style="color:#bbb; font-size:12px;">Diff MTM %</div>
+#                           <div style="font-size:18px; font-weight:bold;">{color_text_html(diff_mtm_pct)}</div>
+#                         </div>
+#                     </div>
+#                     """, unsafe_allow_html=True)
+#
+#             st.markdown(f"**Last checked:** {datetime.now(IST).strftime('%H:%M:%S')}")
+#
+#             # Table
+#             df_show = merged_display.copy()
+#             for c in ["NetQty","NetVal","NetPrice","Close","LTP","MTM","MTM %","Diff_MTM","Diff_MTM %"]:
+#                 if c in df_show.columns:
+#                     df_show[c] = pd.to_numeric(df_show[c], errors="coerce").round(2)
+#
+#             def highlight_col(col):
+#                 return df_show[col].apply(lambda x: "color:limegreen" if pd.to_numeric(x, errors="coerce")>0 else ("color:red" if pd.to_numeric(x, errors="coerce")<0 else "color:white"))
+#
+#             styler = df_show.style.set_properties(**{"text-align":"center"})
+#             for col in ["MTM","MTM %","Diff_MTM","Diff_MTM %"]:
+#                 if col in df_show.columns:
+#                     styler = styler.apply(lambda s: style_pos_neg(s), subset=[col])
+#
+#             st.dataframe(styler, use_container_width=True, height=420)
+#
+#             # Charts
+#             if not history_df.empty:
+#                 fig = go.Figure()
+#                 fig.add_trace(go.Scatter(x=history_df["Time"], y=history_df["MTM"], mode="lines+markers", name="MTM", line=dict(shape="spline", smoothing=1.3)))
+#                 fig.add_trace(go.Scatter(x=history_df["Time"], y=history_df["Diff_MTM"], mode="lines+markers", name="Diff MTM", line=dict(shape="spline", smoothing=1.3)))
+#                 fig.update_layout(title="Progressive MTM vs Diff MTM", paper_bgcolor="#000", plot_bgcolor="#000", font_color="white", height=320)
+#                 st.plotly_chart(fig, use_container_width=True)
+#
+#                 fig2 = go.Figure()
+#                 fig2.add_trace(go.Scatter(x=history_df["Time"], y=history_df["MTM %"], mode="lines+markers", name="MTM %", line=dict(shape="spline", smoothing=1.3)))
+#                 fig2.add_trace(go.Scatter(x=history_df["Time"], y=history_df["Diff_MTM %"], mode="lines+markers", name="Diff MTM %", line=dict(shape="spline", smoothing=1.3)))
+#                 fig2.update_layout(title="Progressive MTM % vs Diff MTM %", paper_bgcolor="#000", plot_bgcolor="#000", font_color="white", height=320)
+#                 st.plotly_chart(fig2, use_container_width=True)
+#             else:
+#                 st.info("No history snapshots yet (will collect when live file is read).")
+#
+#     # --- TAB 2: User Summary ---
+#     with tab2:
+#         st.markdown("### User Summary")
+#         if merged_display.empty:
+#             st.info("No data yet.")
+#         else:
+#             users = [u for u in sorted(merged_display["User"].unique().tolist()) if u and u!="TOTAL"]
+#             all_opts = ["-- All --"] + users
+#             idx = all_opts.index(st.session_state["selected_user"]) if st.session_state["selected_user"] in all_opts else 0
+#             sel = st.selectbox("Select user", options=all_opts, index=idx)
+#             st.session_state["selected_user"] = sel
+#
+#             if sel == "-- All --":
+#                 df_user = merged_display[merged_display["User"] != "TOTAL"].copy()
+#             else:
+#                 df_user = merged_display[(merged_display["User"] == sel) & (merged_display["User"] != "TOTAL")].copy()
+#
+#             # Table then chart
+#             st.subheader("User Table")
+#             if df_user.empty:
+#                 st.write("No records for this user.")
+#             else:
+#                 sty = df_user.style.set_properties(**{"text-align":"center"})
+#                 for col in ["MTM","MTM %","Diff_MTM","Diff_MTM %"]:
+#                     if col in df_user.columns:
+#                         sty = sty.apply(lambda s: style_pos_neg(s), subset=[col])
+#                 st.dataframe(sty, use_container_width=True, height=340)
+#
+#             st.subheader("Symbol MTM Chart")
+#             if df_user.empty:
+#                 st.info("No data to chart.")
+#             else:
+#                 fig_u = go.Figure()
+#                 fig_u.add_trace(go.Scatter(x=df_user["Symbol"], y=df_user["MTM"], mode="lines+markers", name="MTM", line=dict(shape="spline", smoothing=1.2)))
+#                 fig_u.add_trace(go.Scatter(x=df_user["Symbol"], y=df_user["Diff_MTM"], mode="lines+markers", name="Diff MTM", line=dict(shape="spline", smoothing=1.2)))
+#                 fig_u.update_layout(paper_bgcolor="#000", plot_bgcolor="#000", font_color="white", height=450)
+#                 st.plotly_chart(fig_u, use_container_width=True)
+#
+#     # --- TAB 3: Strategy Stats ---
+#     with tab3:
+#         st.markdown("### Strategy Stats")
+#         if merged_display.empty:
+#             st.info("No data yet.")
+#         else:
+#             strategies = [s for s in sorted(merged_display["Strategy"].unique().tolist()) if s and s!=""]
+#             all_opts = ["-- All --"] + strategies
+#             idx = all_opts.index(st.session_state["selected_strategy"]) if st.session_state["selected_strategy"] in all_opts else 0
+#             sel_s = st.selectbox("Select strategy", options=all_opts, index=idx)
+#             st.session_state["selected_strategy"] = sel_s
+#
+#             if sel_s == "-- All --":
+#                 df_str = merged_display[merged_display["User"] != "TOTAL"].copy()
+#             else:
+#                 df_str = merged_display[(merged_display["Strategy"] == sel_s) & (merged_display["User"] != "TOTAL")].copy()
+#
+#             st.subheader("Strategy Chart")
+#             if df_str.empty:
+#                 st.write("No records.")
+#             else:
+#                 fig_s = go.Figure()
+#                 fig_s.add_trace(go.Bar(x=df_str["Symbol"], y=df_str["MTM"], name="MTM"))
+#                 fig_s.add_trace(go.Bar(x=df_str["Symbol"], y=df_str["Diff_MTM"], name="Diff MTM"))
+#                 fig_s.update_layout(barmode='group', paper_bgcolor="#000", plot_bgcolor="#000", font_color="white", height=450)
+#                 st.plotly_chart(fig_s, use_container_width=True)
+#
+#                 st.subheader("Strategy Table")
+#                 sty2 = df_str.style.set_properties(**{"text-align":"center"})
+#                 for col in ["MTM","MTM %","Diff_MTM","Diff_MTM %"]:
+#                     if col in df_str.columns:
+#                         sty2 = sty2.apply(lambda s: style_pos_neg(s), subset=[col])
+#                 st.dataframe(sty2, use_container_width=True, height=340)
+#
+# # -----------------------------
+# # Auto-refresh controller
+# # -----------------------------
+# if st.session_state["csv_uploaded"]:
+#     if AUTOREFRESH_AVAILABLE:
+#         # This will rerun the app automatically every refresh_interval seconds
+#         st_autorefresh(interval=st.session_state["refresh_interval"] * 1000, key="autorefresh")
+#     else:
+#         st.sidebar.info(
+#             "Install `streamlit-autorefresh` for automatic updates "
+#             "(pip install streamlit-autorefresh). Otherwise refresh manually."
+#         )
+
+
+
+# ===============================
+# 📊 LIVE MTM DASHBOARD (FINAL)
+# ===============================
+
 import os
 import io
-import time
 from datetime import datetime
-from typing import List, Optional
-
+from typing import List
+import pytz
 import pandas as pd
 import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
+
+# Timezone (IST)
+IST = pytz.timezone("Asia/Kolkata")
 
 # Optional: TradingView LTP fetch
 try:
@@ -24,53 +597,38 @@ except Exception:
     AUTOREFRESH_AVAILABLE = False
 
 # -----------------------------
-# CONFIG (change base_dir as required)
-# -----------------------------
-DEFAULT_BASE_DIR = r"C:\Users\freedom\Desktop\ORDER B005\backup\GETS_FILES\GETS_EXCEL"
-FILE_NAME = "NetPositionAutoBackup.xls"   # fixed file name in dated folder (DDMon)
-DEFAULT_REFRESH_INTERVAL = 5  # seconds
-
-# -----------------------------
 # PAGE SETUP
 # -----------------------------
 st.set_page_config(page_title="📊 Live MTM Dashboard", layout="wide")
-st.title("📊 Live MTM Dashboard")
+st.title("📊 Live MTM Dashboard (Streamlit Cloud Version)")
 
 # -----------------------------
 # SESSION STATE INIT
 # -----------------------------
-if "csv_df" not in st.session_state:
-    st.session_state["csv_df"] = pd.DataFrame()
-if "csv_uploaded" not in st.session_state:
-    st.session_state["csv_uploaded"] = False
-if "live_upload_df" not in st.session_state:
-    st.session_state["live_upload_df"] = pd.DataFrame()
-if "use_local_live" not in st.session_state:
-    st.session_state["use_local_live"] = True
-if "base_dir" not in st.session_state:
-    st.session_state["base_dir"] = DEFAULT_BASE_DIR
-if "refresh_interval" not in st.session_state:
-    st.session_state["refresh_interval"] = DEFAULT_REFRESH_INTERVAL
-if "last_local_mtime" not in st.session_state:
-    st.session_state["last_local_mtime"] = None
-if "merged_df" not in st.session_state:
-    st.session_state["merged_df"] = pd.DataFrame()
-if "history" not in st.session_state:
-    st.session_state["history"] = []  # list of snapshots
-if "selected_user" not in st.session_state:
-    st.session_state["selected_user"] = "-- All --"
-if "selected_strategy" not in st.session_state:
-    st.session_state["selected_strategy"] = "-- All --"
+defaults = {
+    "csv_df": pd.DataFrame(),
+    "csv_uploaded": False,
+    "live_upload_df": pd.DataFrame(),
+    "uploaded_live_bytes": None,
+    "uploaded_live_name": None,
+    "refresh_interval": 5,
+    "merged_df": pd.DataFrame(),
+    "history": [],
+    "selected_user": "-- All --",
+    "selected_strategy": "-- All --",
+}
+for k, v in defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
 # -----------------------------
 # SIDEBAR: Uploads & Settings
 # -----------------------------
 st.sidebar.header("Files & Settings")
 
-# Portfolio upload (CSV or Excel) — one time
+# Portfolio upload (CSV or Excel)
 uploaded_portfolio = st.sidebar.file_uploader("📂 Upload Portfolio (CSV or XLS/XLSX)", type=["csv", "xls", "xlsx"])
 if uploaded_portfolio is not None and not st.session_state["csv_uploaded"]:
-    # read uploaded file into df
     try:
         name = uploaded_portfolio.name.lower()
         bytes_data = uploaded_portfolio.read()
@@ -80,104 +638,57 @@ if uploaded_portfolio is not None and not st.session_state["csv_uploaded"]:
             df_csv = pd.read_excel(io.BytesIO(bytes_data))
         st.session_state["csv_df"] = df_csv.copy()
         st.session_state["csv_uploaded"] = True
-        st.sidebar.success(f"Portfolio loaded: {uploaded_portfolio.name} ({len(df_csv)} rows)")
+        st.sidebar.success(f"✅ Portfolio loaded: {uploaded_portfolio.name} ({len(df_csv)} rows)")
 
-        # Ensure Strategy column
-        if "Strategy" not in st.session_state["csv_df"].columns:
-            st.session_state["csv_df"]["Strategy"] = st.session_state["csv_df"].get("NetVal", 0).apply(
-                lambda x: "CIRCUIT" if pd.notna(x) and float(x) > 425000 else "CHART"
-            )
-        else:
-            st.session_state["csv_df"]["Strategy"] = st.session_state["csv_df"]["Strategy"].fillna("").astype(str)
-            blank_mask = st.session_state["csv_df"]["Strategy"].str.strip() == ""
-            if blank_mask.any():
-                st.session_state["csv_df"].loc[blank_mask, "Strategy"] = st.session_state["csv_df"].loc[blank_mask, "NetVal"].apply(
-                    lambda x: "CIRCUIT" if pd.notna(x) and float(x) > 425000 else "CHART"
-                )
-
-        # Ensure Nse_close exists
-        if "Nse_close" not in st.session_state["csv_df"].columns:
-            st.session_state["csv_df"]["Nse_close"] = 0.0
+        # Ensure Strategy
+        if "Strategy" not in df_csv.columns:
+            df_csv["Strategy"] = df_csv.get("NetVal", 0).apply(lambda x: "CIRCUIT" if float(x) > 425000 else "CHART")
+        if "Nse_close" not in df_csv.columns:
+            df_csv["Nse_close"] = 0.0
 
     except Exception as e:
-        st.sidebar.error(f"Failed to read portfolio: {e}")
+        st.sidebar.error(f"❌ Failed to read portfolio: {e}")
 
-# Live-trades (NetPosition) upload OR local mode
-st.sidebar.markdown("### Live Trades Source")
-live_mode = st.sidebar.radio("Select live trades source", ("Auto-read local file", "Upload live trades file"))
-if live_mode == "Auto-read local file":
-    st.session_state["use_local_live"] = True
-else:
-    st.session_state["use_local_live"] = False
+# Live Trades Upload (TSV / CSV / Excel)
+st.sidebar.markdown("### Live Trades File (Upload once)")
+uploaded_live = st.sidebar.file_uploader("📤 Upload live NetPosition file", type=["tsv", "csv", "xls", "xlsx"])
 
-if st.session_state["use_local_live"]:
-    st.sidebar.text_input("Base folder for daily folders", value=st.session_state["base_dir"], key="base_dir")
-    st.sidebar.markdown(f"Looking for `{FILE_NAME}` inside folder like `DDMon` (e.g. 04Nov) under base_dir.")
-else:
-    uploaded_live = st.sidebar.file_uploader("📤 Upload live NetPosition (XLS/XLSX/TSV)", type=["xls", "xlsx", "csv", "tsv"])
-    if uploaded_live is not None:
-        try:
-            name = uploaded_live.name.lower()
-            b = uploaded_live.read()
+if uploaded_live is not None:
+    if st.session_state["uploaded_live_bytes"] is None:
+        st.session_state["uploaded_live_bytes"] = uploaded_live.read()
+        st.session_state["uploaded_live_name"] = uploaded_live.name
 
-            # Try reading based on file type and content
-            if name.endswith(".csv"):
-                df_live = pd.read_csv(io.StringIO(b.decode("utf-8")), sep=",", engine="python")
-            elif name.endswith(".tsv"):
-                df_live = pd.read_csv(io.StringIO(b.decode("utf-8")), sep="\t", engine="python")
-            elif name.endswith(".xls") or name.endswith(".xlsx"):
-                # Try multiple Excel engines, fallback to TSV if needed
-                try:
-                    df_live = pd.read_excel(io.BytesIO(b), engine="xlrd")
-                except Exception:
-                    try:
-                        df_live = pd.read_excel(io.BytesIO(b), engine="openpyxl")
-                    except Exception:
-                        # If it’s actually a TSV saved as .xls
-                        df_live = pd.read_csv(io.StringIO(b.decode("utf-8")), sep="\t", engine="python")
-            else:
-                raise ValueError("Unsupported file type")
+    file_bytes = st.session_state["uploaded_live_bytes"]
+    name = st.session_state["uploaded_live_name"].lower()
 
-            st.session_state["live_upload_df"] = df_live.copy()
-            st.sidebar.success(f"Live trades uploaded: {uploaded_live.name} ({len(df_live)} rows)")
-
-        except Exception as e:
-            st.sidebar.error(f"Failed to read live trades upload: {e}")
-
-# Refresh interval
-st.session_state["refresh_interval"] = st.sidebar.number_input("Refresh interval (seconds)", min_value=1, max_value=60, value=st.session_state["refresh_interval"], step=1)
-
-st.sidebar.markdown("---")
-st.sidebar.write("LTP source:", "TradingView (Query)" if TV_AVAILABLE else "Unavailable — uses NetPrice")
-
-# -----------------------------
-# Helper: load local live file
-# -----------------------------
-def load_local_live(base_dir: str, file_name: str) -> pd.DataFrame:
-    folder = os.path.join(base_dir, datetime.now().strftime("%d%b"))
-    fpath = os.path.join(folder, file_name)
-    if not os.path.exists(fpath):
-        return pd.DataFrame()
-    # attempt excel -> fallback to csv/tsv
     try:
-        df = pd.read_excel(fpath, engine="xlrd")
-        return df
-    except Exception:
-        try:
-            df = pd.read_csv(fpath, sep="\t", engine="python")
-            return df
-        except Exception:
-            try:
-                df = pd.read_excel(fpath, engine="openpyxl")
-                return df
-            except Exception:
-                return pd.DataFrame()
+        if name.endswith(".tsv"):
+            df_live = pd.read_csv(io.StringIO(file_bytes.decode("utf-8")), sep="\t", engine="python")
+        elif name.endswith(".csv"):
+            df_live = pd.read_csv(io.StringIO(file_bytes.decode("utf-8")), sep=",", engine="python")
+        elif name.endswith(".xls") or name.endswith(".xlsx"):
+            df_live = pd.read_excel(io.BytesIO(file_bytes))
+        else:
+            df_live = pd.DataFrame()
+
+        st.session_state["live_upload_df"] = df_live.copy()
+        st.sidebar.success(f"✅ Live file loaded ({len(df_live)} rows)")
+
+    except Exception as e:
+        st.sidebar.error(f"❌ Failed to read live file: {e}")
+
+# Refresh Interval
+st.session_state["refresh_interval"] = st.sidebar.number_input(
+    "🔁 Refresh interval (seconds)", min_value=3, max_value=60, value=st.session_state["refresh_interval"], step=1
+)
+st.sidebar.markdown(f"🕒 Current Time (IST): {datetime.now(IST).strftime('%H:%M:%S')}")
+st.sidebar.markdown("---")
 
 # -----------------------------
-# Helper: fetch LTP (cached)
+# HELPER FUNCTIONS
 # -----------------------------
 def fetch_ltp(symbols: List[str]) -> pd.DataFrame:
-    """Always fetch fresh LTP from TradingView (no cache)."""
+    """Fetch latest LTP from TradingView"""
     if not TV_AVAILABLE or not symbols:
         return pd.DataFrame(columns=["Symbol", "LTP"])
     try:
@@ -189,372 +700,96 @@ def fetch_ltp(symbols: List[str]) -> pd.DataFrame:
             .get_scanner_data()
         )
         tv = tv.rename(columns={"name": "Symbol", "close": "LTP"})
-        tv = tv.drop_duplicates(subset=["Symbol"], keep="first")
         tv["LTP"] = pd.to_numeric(tv["LTP"], errors="coerce").fillna(0.0).round(2)
         tv = tv[tv["Symbol"].isin(symbols)][["Symbol", "LTP"]]
-        tv["Timestamp"] = datetime.now().strftime("%H:%M:%S")
+        tv["Timestamp"] = datetime.now(IST).strftime("%H:%M:%S")
         return tv
     except Exception as e:
         st.warning(f"LTP fetch failed: {e}")
         return pd.DataFrame(columns=["Symbol", "LTP"])
 
-# -----------------------------
-# Merge logic (CSV + Live)
-# -----------------------------
-def merge_local_csv(df_tsv: pd.DataFrame, df_csv: pd.DataFrame) -> pd.DataFrame:
-    # Ensure required columns exist
-    for col in ["User", "Exchange", "Strategy", "Symbol", "Ser_Exp", "NetQty", "NetVal"]:
-        if col not in df_csv.columns:
-            df_csv[col] = "" if col not in ["NetQty", "NetVal"] else 0.0
-        if col not in df_tsv.columns:
-            df_tsv[col] = "" if col not in ["NetQty", "NetVal"] else 0.0
+def merge_and_adjust(df_live: pd.DataFrame, df_csv: pd.DataFrame) -> pd.DataFrame:
+    if df_live is None or df_live.empty:
+        return pd.DataFrame()
 
-    # Strategy fill for CSV
-    if "Strategy" not in df_csv.columns:
-        df_csv["Strategy"] = df_csv.get("NetVal", 0).apply(lambda x: "CIRCUIT" if pd.notna(x) and float(x) > 425000 else "CHART")
-    else:
-        df_csv["Strategy"] = df_csv["Strategy"].fillna("").astype(str)
-        blank_mask = df_csv["Strategy"].str.strip() == ""
-        if blank_mask.any():
-            df_csv.loc[blank_mask, "Strategy"] = df_csv.loc[blank_mask, "NetVal"].apply(lambda x: "CIRCUIT" if pd.notna(x) and float(x) > 425000 else "CHART")
+    merged = pd.merge(df_live, df_csv, on="Symbol", how="left", suffixes=("", "_csv"))
+    merged["NetQty"] = pd.to_numeric(merged.get("NetQty", 0), errors="coerce").fillna(0.0)
+    merged["NetVal"] = pd.to_numeric(merged.get("NetVal", 0), errors="coerce").fillna(0.0)
+    merged["NetPrice"] = merged.apply(lambda r: (r.NetVal / r.NetQty) if r.NetQty else 0.0, axis=1)
 
-    # If no TSV/live -> return CSV-only (compute NetPrice)
-    if df_tsv is None or df_tsv.empty:
-        merged = df_csv.copy()
-        merged["NetQty"] = pd.to_numeric(merged.get("NetQty", 0), errors="coerce").fillna(0.0)
-        merged["NetVal"] = pd.to_numeric(merged.get("NetVal", 0), errors="coerce").fillna(0.0)
-        merged["NetPrice"] = merged.apply(lambda r: (r.NetVal / r.NetQty) if r.NetQty else 0.0, axis=1)
-        merged = merged[merged["NetQty"] != 0].reset_index(drop=True)
-        return merged
-
-    # concat & aggregate
-    # Ensure NetPrice may exist; if not compute later
-    cols_needed = ["User","Exchange","Strategy","Symbol","Ser_Exp","NetQty","NetVal"]
-    concat = pd.concat([
-        df_csv[cols_needed].copy(),
-        df_tsv[cols_needed].copy()
-    ], ignore_index=True, sort=False)
-
-    concat["NetQty"] = pd.to_numeric(concat["NetQty"], errors="coerce").fillna(0.0)
-    concat["NetVal"] = pd.to_numeric(concat["NetVal"], errors="coerce").fillna(0.0)
-
-    grouped = concat.groupby(["User","Exchange","Symbol","Ser_Exp"], as_index=False).agg({"NetQty":"sum","NetVal":"sum"})
-    grouped["NetPrice"] = grouped.apply(lambda r: (r.NetVal / r.NetQty) if r.NetQty else 0.0, axis=1)
-    grouped = grouped[grouped["NetQty"] != 0].reset_index(drop=True)
-
-    # Strategy: prefer CSV strategy if symbol present in csv
-    csv_strategy_map = df_csv.set_index("Symbol")["Strategy"].to_dict()
-    def decide_strategy(sym, nv):
-        s = csv_strategy_map.get(sym, None)
-        if s is not None and str(s).strip() != "":
-            return s
-        return "CIRCUIT" if pd.notna(nv) and float(nv) > 425000 else "CHART"
-    grouped["Strategy"] = grouped.apply(lambda r: decide_strategy(r["Symbol"], r["NetVal"]), axis=1)
-
-    return grouped
-
-def merge_and_adjust(df_tsv: pd.DataFrame, df_csv: pd.DataFrame) -> pd.DataFrame:
-    merged = merge_local_csv(df_tsv, df_csv)
-
-    # Bring Close from CSV (Nse_close)
-    if "Nse_close" not in df_csv.columns:
-        df_csv["Nse_close"] = 0.0
-    close_map = df_csv[["Symbol","Nse_close"]].rename(columns={"Nse_close":"Close"})
-    merged = pd.merge(merged, close_map, on="Symbol", how="left").fillna({"Close": 0.0})
-
-    # Fetch LTP (or fallback)
     symbols = merged["Symbol"].dropna().unique().tolist()
     ltp_df = fetch_ltp(symbols)
     if not ltp_df.empty:
-        merged = pd.merge(merged, ltp_df, on="Symbol", how="left").fillna({"LTP":0.0})
+        merged = pd.merge(merged, ltp_df, on="Symbol", how="left")
     else:
-        merged["LTP"] = merged["NetPrice"].astype(float)
+        merged["LTP"] = merged["NetPrice"]
 
-    # Numeric coercion
-    for c in ["NetQty","NetVal","NetPrice","Close","LTP"]:
-        if c in merged.columns:
-            merged[c] = pd.to_numeric(merged[c], errors="coerce").fillna(0.0)
-
-    # MTM metrics
     merged["MTM"] = (merged["LTP"] - merged["NetPrice"]) * merged["NetQty"]
     merged["MTM %"] = merged.apply(lambda r: (r["MTM"] / r["NetVal"] * 100) if r["NetVal"] else 0.0, axis=1)
-    merged["Diff_MTM"] = (merged["LTP"] - merged["Close"]) * merged["NetQty"]
-    merged["Diff_MTM %"] = merged.apply(lambda r: (r["Diff_MTM"] / r["NetVal"] * 100) if r["NetVal"] else 0.0, axis=1)
 
-    # Round numeric columns to 2 decimals
-    numeric_cols = ["NetQty","NetVal","NetPrice","Close","LTP","MTM","MTM %","Diff_MTM","Diff_MTM %"]
-    for c in numeric_cols:
-        if c in merged.columns:
-            merged[c] = pd.to_numeric(merged[c], errors="coerce").fillna(0.0).round(2)
-
-    # Add TOTAL row
     total_row = {
-        "User":"TOTAL",
-        "Exchange":"",
-        "Strategy":"",
-        "Symbol":"",
-        "Ser_Exp":"",
+        "Symbol": "TOTAL",
         "NetQty": merged["NetQty"].sum(),
         "NetVal": merged["NetVal"].sum(),
-        "NetPrice":"",
-        "Close":"",
-        "LTP":"",
         "MTM": merged["MTM"].sum(),
         "MTM %": (merged["MTM"].sum() / merged["NetVal"].sum() * 100) if merged["NetVal"].sum() else 0.0,
-        "Diff_MTM": merged["Diff_MTM"].sum(),
-        "Diff_MTM %": (merged["Diff_MTM"].sum() / merged["NetVal"].sum() * 100) if merged["NetVal"].sum() else 0.0
     }
     merged = pd.concat([merged, pd.DataFrame([total_row])], ignore_index=True)
 
-    # Reorder for display
-    col_order = ["User","Strategy","Exchange","Symbol","Ser_Exp","NetQty","NetVal","NetPrice","Close","LTP","MTM","MTM %","Diff_MTM","Diff_MTM %"]
-    merged = merged[[c for c in col_order if c in merged.columns]]
-
-    merged = merged.fillna("")
+    numeric_cols = ["NetQty", "NetVal", "NetPrice", "LTP", "MTM", "MTM %"]
+    for c in numeric_cols:
+        if c in merged.columns:
+            merged[c] = pd.to_numeric(merged[c], errors="coerce").fillna(0.0).round(2)
     return merged
 
 # -----------------------------
-# Utilities for UI formatting
+# MAIN DASHBOARD
 # -----------------------------
-def color_text_html(val):
-    try:
-        v = float(val)
-    except Exception:
-        return f"{val}"
-    color = "#00FF00" if v >= 0 else "#FF4C4C"
-    return f"<span style='color:{color}; font-weight:bold'>{v:,.2f}</span>"
+st.markdown(f"🕒 **Last refresh:** {datetime.now(IST).strftime('%H:%M:%S')} (IST)")
 
-def style_pos_neg(series):
-    try:
-        s = pd.to_numeric(series, errors="coerce").fillna(0.0)
-    except Exception:
-        return ["color:white"] * len(series)
-    return ["color:limegreen" if v > 0 else ("color:red" if v < 0 else "color:white") for v in s]
-
-# -----------------------------
-# MAIN: Auto-read or use upload, merge, display
-# -----------------------------
-status_col, action_col = st.columns([3,1])
-with status_col:
-    ts = datetime.now().strftime("%H:%M:%S")
-    st.markdown(f"**Last check:** {ts} — Live file mode: **{'Local Auto' if st.session_state['use_local_live'] else 'Uploaded Live'}**")
-
-# Load CSV (must be uploaded)
 if not st.session_state["csv_uploaded"]:
-    st.warning("Upload a Portfolio file in the sidebar to start the dashboard (CSV or XLS/XLSX).")
+    st.warning("Please upload Portfolio file first.")
+elif st.session_state["live_upload_df"].empty:
+    st.warning("Please upload Live NetPosition file to view MTM.")
 else:
-    # Determine live-source DataFrame
-    df_live = pd.DataFrame()
-    if st.session_state["use_local_live"]:
-        # try read local file path every refresh interval if changed
-        base_dir = st.session_state["base_dir"]
-        folder = os.path.join(base_dir, datetime.now().strftime("%d%b"))
-        fpath = os.path.join(folder, FILE_NAME)
-        if os.path.exists(fpath):
-            mtime = os.path.getmtime(fpath)
-            # reload on change or first time
-            if st.session_state["last_local_mtime"] != mtime or st.session_state["merged_df"].empty:
-                try:
-                    df_live = load_local_live(base_dir, FILE_NAME)
-                    st.session_state["last_local_mtime"] = mtime
-                except Exception as e:
-                    st.error(f"Failed reading local live file: {e}")
-                    df_live = pd.DataFrame()
-            else:
-                # use previous merged_df's live portion (no reload)
-                df_live = pd.DataFrame()  # handled by merge logic expecting empty -> csv-only
-        else:
-            df_live = pd.DataFrame()
+    merged_df = merge_and_adjust(st.session_state["live_upload_df"], st.session_state["csv_df"])
+    if merged_df.empty:
+        st.info("No records found after merging files.")
     else:
-        # use uploaded live from session_state (if any)
-        df_live = st.session_state.get("live_upload_df", pd.DataFrame())
-
-    # Merge
-    try:
-        merged_df = merge_and_adjust(df_live, st.session_state["csv_df"])
         st.session_state["merged_df"] = merged_df.copy()
-        # update history snapshot (use TOTAL row)
-        if not merged_df.empty and "User" in merged_df.columns and "TOTAL" in merged_df["User"].values:
-            total = merged_df[merged_df["User"] == "TOTAL"].iloc[0]
-            snap = {
-                "Time": datetime.now().strftime("%H:%M:%S"),
-                "MTM": float(total.get("MTM") or 0.0),
-                "Diff_MTM": float(total.get("Diff_MTM") or 0.0),
-                "MTM %": float(total.get("MTM %") or 0.0),
-                "Diff_MTM %": float(total.get("Diff_MTM %") or 0.0)
-            }
-            st.session_state["history"].append(snap)
-            if len(st.session_state["history"]) > 400:
-                st.session_state["history"] = st.session_state["history"][-400:]
-    except Exception as e:
-        st.error(f"Merging error: {e}")
-        merged_df = pd.DataFrame()
+        total = merged_df[merged_df["Symbol"] == "TOTAL"].iloc[0]
+        st.markdown(
+            f"""
+            <div style="display:flex;gap:12px;margin-bottom:10px;">
+                <div style="flex:1;background:#0b0b0b;padding:12px;border-radius:8px;text-align:center;">
+                    <div style="color:#bbb;font-size:12px;">Holding Value</div>
+                    <div style="font-size:18px;font-weight:bold;color:white;">{total['NetVal']:,.2f}</div>
+                </div>
+                <div style="flex:1;background:#0b0b0b;padding:12px;border-radius:8px;text-align:center;">
+                    <div style="color:#bbb;font-size:12px;">MTM</div>
+                    <div style="font-size:18px;font-weight:bold;color:lime;">{total['MTM']:,.2f}</div>
+                </div>
+                <div style="flex:1;background:#0b0b0b;padding:12px;border-radius:8px;text-align:center;">
+                    <div style="color:#bbb;font-size:12px;">MTM %</div>
+                    <div style="font-size:18px;font-weight:bold;color:lime;">{total['MTM %']:,.2f}%</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    # DISPLAY UI: tabs
-    merged_display = st.session_state["merged_df"].copy() if not st.session_state["merged_df"].empty else pd.DataFrame()
-    history_df = pd.DataFrame(st.session_state["history"])
-
-    tab1, tab2, tab3 = st.tabs(["📈 Dashboard", "👤 User Summary", "📊 Strategy Stats"])
-
-    # --- TAB 1: Dashboard ---
-    with tab1:
-        st.markdown("### Dashboard")
-        if merged_display.empty:
-            st.info("No merged data yet.")
-        else:
-            # total row detection
-            total_row = None
-            if "User" in merged_display.columns and "TOTAL" in merged_display["User"].values:
-                total_row = merged_display[merged_display["User"] == "TOTAL"].iloc[0]
-            elif "Strategy" in merged_display.columns and "TOTAL" in merged_display["Strategy"].values:
-                total_row = merged_display[merged_display["Strategy"] == "TOTAL"].iloc[0]
-
-            if total_row is not None:
-                net_val = float(total_row.get("NetVal") or 0.0)
-                mtm = float(total_row.get("MTM") or 0.0)
-                mtm_pct = float(total_row.get("MTM %") or 0.0)
-                diff_mtm = float(total_row.get("Diff_MTM") or 0.0)
-                diff_mtm_pct = float(total_row.get("Diff_MTM %") or 0.0)
-
-                st.markdown(
-                    f"""
-                    <div style="display:flex; gap:8px; margin-bottom:10px;">
-                        <div style="flex:1; background:#0b0b0b; padding:12px; border-radius:8px; text-align:center;">
-                          <div style="color:#bbb; font-size:12px;">Holding Value</div>
-                          <div style="font-size:18px; font-weight:bold; color:white;">{net_val:,.2f}</div>
-                        </div>
-                        <div style="flex:1; background:#0b0b0b; padding:12px; border-radius:8px; text-align:center;">
-                          <div style="color:#bbb; font-size:12px;">MTM</div>
-                          <div style="font-size:18px; font-weight:bold;">{color_text_html(mtm)}</div>
-                        </div>
-                        <div style="flex:1; background:#0b0b0b; padding:12px; border-radius:8px; text-align:center;">
-                          <div style="color:#bbb; font-size:12px;">MTM %</div>
-                          <div style="font-size:18px; font-weight:bold;">{color_text_html(mtm_pct)}</div>
-                        </div>
-                        <div style="flex:1; background:#0b0b0b; padding:12px; border-radius:8px; text-align:center;">
-                          <div style="color:#bbb; font-size:12px;">Diff MTM</div>
-                          <div style="font-size:18px; font-weight:bold;">{color_text_html(diff_mtm)}</div>
-                        </div>
-                        <div style="flex:1; background:#0b0b0b; padding:12px; border-radius:8px; text-align:center;">
-                          <div style="color:#bbb; font-size:12px;">Diff MTM %</div>
-                          <div style="font-size:18px; font-weight:bold;">{color_text_html(diff_mtm_pct)}</div>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-            st.markdown(f"**Last checked:** {datetime.now().strftime('%H:%M:%S')}")
-
-            # Table
-            df_show = merged_display.copy()
-            for c in ["NetQty","NetVal","NetPrice","Close","LTP","MTM","MTM %","Diff_MTM","Diff_MTM %"]:
-                if c in df_show.columns:
-                    df_show[c] = pd.to_numeric(df_show[c], errors="coerce").round(2)
-
-            def highlight_col(col):
-                return df_show[col].apply(lambda x: "color:limegreen" if pd.to_numeric(x, errors="coerce")>0 else ("color:red" if pd.to_numeric(x, errors="coerce")<0 else "color:white"))
-
-            styler = df_show.style.set_properties(**{"text-align":"center"})
-            for col in ["MTM","MTM %","Diff_MTM","Diff_MTM %"]:
-                if col in df_show.columns:
-                    styler = styler.apply(lambda s: style_pos_neg(s), subset=[col])
-
-            st.dataframe(styler, use_container_width=True, height=420)
-
-            # Charts
-            if not history_df.empty:
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=history_df["Time"], y=history_df["MTM"], mode="lines+markers", name="MTM", line=dict(shape="spline", smoothing=1.3)))
-                fig.add_trace(go.Scatter(x=history_df["Time"], y=history_df["Diff_MTM"], mode="lines+markers", name="Diff MTM", line=dict(shape="spline", smoothing=1.3)))
-                fig.update_layout(title="Progressive MTM vs Diff MTM", paper_bgcolor="#000", plot_bgcolor="#000", font_color="white", height=320)
-                st.plotly_chart(fig, use_container_width=True)
-
-                fig2 = go.Figure()
-                fig2.add_trace(go.Scatter(x=history_df["Time"], y=history_df["MTM %"], mode="lines+markers", name="MTM %", line=dict(shape="spline", smoothing=1.3)))
-                fig2.add_trace(go.Scatter(x=history_df["Time"], y=history_df["Diff_MTM %"], mode="lines+markers", name="Diff MTM %", line=dict(shape="spline", smoothing=1.3)))
-                fig2.update_layout(title="Progressive MTM % vs Diff MTM %", paper_bgcolor="#000", plot_bgcolor="#000", font_color="white", height=320)
-                st.plotly_chart(fig2, use_container_width=True)
-            else:
-                st.info("No history snapshots yet (will collect when live file is read).")
-
-    # --- TAB 2: User Summary ---
-    with tab2:
-        st.markdown("### User Summary")
-        if merged_display.empty:
-            st.info("No data yet.")
-        else:
-            users = [u for u in sorted(merged_display["User"].unique().tolist()) if u and u!="TOTAL"]
-            all_opts = ["-- All --"] + users
-            idx = all_opts.index(st.session_state["selected_user"]) if st.session_state["selected_user"] in all_opts else 0
-            sel = st.selectbox("Select user", options=all_opts, index=idx)
-            st.session_state["selected_user"] = sel
-
-            if sel == "-- All --":
-                df_user = merged_display[merged_display["User"] != "TOTAL"].copy()
-            else:
-                df_user = merged_display[(merged_display["User"] == sel) & (merged_display["User"] != "TOTAL")].copy()
-
-            # Table then chart
-            st.subheader("User Table")
-            if df_user.empty:
-                st.write("No records for this user.")
-            else:
-                sty = df_user.style.set_properties(**{"text-align":"center"})
-                for col in ["MTM","MTM %","Diff_MTM","Diff_MTM %"]:
-                    if col in df_user.columns:
-                        sty = sty.apply(lambda s: style_pos_neg(s), subset=[col])
-                st.dataframe(sty, use_container_width=True, height=340)
-
-            st.subheader("Symbol MTM Chart")
-            if df_user.empty:
-                st.info("No data to chart.")
-            else:
-                fig_u = go.Figure()
-                fig_u.add_trace(go.Scatter(x=df_user["Symbol"], y=df_user["MTM"], mode="lines+markers", name="MTM", line=dict(shape="spline", smoothing=1.2)))
-                fig_u.add_trace(go.Scatter(x=df_user["Symbol"], y=df_user["Diff_MTM"], mode="lines+markers", name="Diff MTM", line=dict(shape="spline", smoothing=1.2)))
-                fig_u.update_layout(paper_bgcolor="#000", plot_bgcolor="#000", font_color="white", height=450)
-                st.plotly_chart(fig_u, use_container_width=True)
-
-    # --- TAB 3: Strategy Stats ---
-    with tab3:
-        st.markdown("### Strategy Stats")
-        if merged_display.empty:
-            st.info("No data yet.")
-        else:
-            strategies = [s for s in sorted(merged_display["Strategy"].unique().tolist()) if s and s!=""]
-            all_opts = ["-- All --"] + strategies
-            idx = all_opts.index(st.session_state["selected_strategy"]) if st.session_state["selected_strategy"] in all_opts else 0
-            sel_s = st.selectbox("Select strategy", options=all_opts, index=idx)
-            st.session_state["selected_strategy"] = sel_s
-
-            if sel_s == "-- All --":
-                df_str = merged_display[merged_display["User"] != "TOTAL"].copy()
-            else:
-                df_str = merged_display[(merged_display["Strategy"] == sel_s) & (merged_display["User"] != "TOTAL")].copy()
-
-            st.subheader("Strategy Chart")
-            if df_str.empty:
-                st.write("No records.")
-            else:
-                fig_s = go.Figure()
-                fig_s.add_trace(go.Bar(x=df_str["Symbol"], y=df_str["MTM"], name="MTM"))
-                fig_s.add_trace(go.Bar(x=df_str["Symbol"], y=df_str["Diff_MTM"], name="Diff MTM"))
-                fig_s.update_layout(barmode='group', paper_bgcolor="#000", plot_bgcolor="#000", font_color="white", height=450)
-                st.plotly_chart(fig_s, use_container_width=True)
-
-                st.subheader("Strategy Table")
-                sty2 = df_str.style.set_properties(**{"text-align":"center"})
-                for col in ["MTM","MTM %","Diff_MTM","Diff_MTM %"]:
-                    if col in df_str.columns:
-                        sty2 = sty2.apply(lambda s: style_pos_neg(s), subset=[col])
-                st.dataframe(sty2, use_container_width=True, height=340)
+        st.dataframe(merged_df, use_container_width=True, height=450)
 
 # -----------------------------
-# Auto-refresh controller
+# AUTO REFRESH CONTROLLER
 # -----------------------------
 if st.session_state["csv_uploaded"]:
     if AUTOREFRESH_AVAILABLE:
-        # This will rerun the app automatically every refresh_interval seconds
-        st_autorefresh(interval=st.session_state["refresh_interval"] * 1000, key="autorefresh")
+        count = st_autorefresh(interval=st.session_state["refresh_interval"] * 1000, key="autorefresh")
+        st.markdown(
+            f"<div style='color:lime;font-weight:bold;'>🔁 Auto-refresh #{count} | Time: {datetime.now(IST).strftime('%H:%M:%S')} (IST)</div>",
+            unsafe_allow_html=True,
+        )
     else:
         st.sidebar.info(
             "Install `streamlit-autorefresh` for automatic updates "
