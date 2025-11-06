@@ -1,11 +1,3 @@
-
-# LOCAL_CSV.py
-# Live MTM Dashboard (Streamlit)
-# - Upload Portfolio (CSV / XLS[X]) once
-# - Live Trades: auto-read local NetPositionAutoBackup.xls OR upload an XLSX/TSV
-# - Refresh live trades every REFRESH_INTERVAL seconds
-# - Merge, compute MTM & Diff MTM, show dashboard with 3 tabs
-
 import os
 import io
 import time
@@ -184,8 +176,8 @@ def load_local_live(base_dir: str, file_name: str) -> pd.DataFrame:
 # -----------------------------
 # Helper: fetch LTP (cached)
 # -----------------------------
-@st.cache_data(ttl=5)
 def fetch_ltp(symbols: List[str]) -> pd.DataFrame:
+    """Always fetch fresh LTP from TradingView (no cache)."""
     if not TV_AVAILABLE or not symbols:
         return pd.DataFrame(columns=["Symbol", "LTP"])
     try:
@@ -199,7 +191,9 @@ def fetch_ltp(symbols: List[str]) -> pd.DataFrame:
         tv = tv.rename(columns={"name": "Symbol", "close": "LTP"})
         tv = tv.drop_duplicates(subset=["Symbol"], keep="first")
         tv["LTP"] = pd.to_numeric(tv["LTP"], errors="coerce").fillna(0.0).round(2)
-        return tv[tv["Symbol"].isin(symbols)][["Symbol", "LTP"]]
+        tv = tv[tv["Symbol"].isin(symbols)][["Symbol", "LTP"]]
+        tv["Timestamp"] = datetime.now().strftime("%H:%M:%S")
+        return tv
     except Exception as e:
         st.warning(f"LTP fetch failed: {e}")
         return pd.DataFrame(columns=["Symbol", "LTP"])
@@ -559,7 +553,10 @@ else:
 # -----------------------------
 if st.session_state["csv_uploaded"]:
     if AUTOREFRESH_AVAILABLE:
-        # this will rerun the script every refresh_interval seconds
+        # This will rerun the app automatically every refresh_interval seconds
         st_autorefresh(interval=st.session_state["refresh_interval"] * 1000, key="autorefresh")
     else:
-        st.sidebar.info("Install `streamlit-autorefresh` for automatic polling (pip install streamlit-autorefresh). Otherwise refresh page manually.")
+        st.sidebar.info(
+            "Install `streamlit-autorefresh` for automatic updates "
+            "(pip install streamlit-autorefresh). Otherwise refresh manually."
+        )
