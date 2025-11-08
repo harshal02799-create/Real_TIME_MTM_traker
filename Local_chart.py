@@ -23,51 +23,6 @@ class LiveMTMDashboard:
 
         # Sidebar file uploader
         self.csv_path = st.sidebar.file_uploader("📂 Upload your Google CSV file", type=["csv"])
-        # === CSV Upload Help Section ===
-        with st.sidebar.expander("📘 CSV Upload Instructions", expanded=False):
-            st.markdown("""
-            **🧾 Expected CSV Columns:**
-            - `User` → Client name (e.g., Harshal, ABC)
-            - `Exchange` → NSE/BSE etc.
-            - `Strategy` → Trading strategy name (CIRCUIT / CHART)
-            - `Symbol` → Stock/Future/Option symbol
-            - `Ser_Exp` → Series & Expiry (e.g., NOV25)
-            - `NetQty` → Net Quantity (numeric)
-            - `NetVal` → Net Value (numeric)
-            - `Nse_close` → Previous close price (numeric)
-
-            **✅ Format Example:**
-            | User | Exchange | Strategy | Symbol | Ser_Exp | NetQty | NetVal | Nse_close |
-            |------|-----------|-----------|--------|----------|---------|---------|------------|
-            | Harshal | NSE | CHART | RELIANCE | NOV25 | 100 | 250000 | 2520.50 |
-            | ABC | NSE | CIRCUIT | INFY | NOV25 | -200 | -350000 | 1568.25 |
-
-            **📍 Notes:**
-            - The file must be a `.csv` (UTF-8 encoded)
-            - Each symbol should have correct `Nse_close`
-            - NetQty = 0 rows will be ignored automatically
-            """)
-
-            # === Option to download sample file ===
-            import io
-            sample_data = pd.DataFrame({
-                "User": ["Harshal", "ABC"],
-                "Exchange": ["NSE", "NSE"],
-                "Strategy": ["CHART", "CIRCUIT"],
-                "Symbol": ["RELIANCE", "INFY"],
-                "Ser_Exp": ["NOV25", "NOV25"],
-                "NetQty": [100, -200],
-                "NetVal": [250000, -350000],
-                "Nse_close": [2520.5, 1568.25]
-            })
-            csv_buffer = io.StringIO()
-            sample_data.to_csv(csv_buffer, index=False)
-            st.download_button(
-                label="⬇️ Download Sample CSV",
-                data=csv_buffer.getvalue(),
-                file_name="sample_google_data.csv",
-                mime="text/csv",
-            )
 
     # === Load Local File ===
     def load_local_file(self):
@@ -319,34 +274,9 @@ class LiveMTMDashboard:
     def run(self):
         if not self.csv_path:
             st.info("👆 Upload your Google CSV to start.")
+            return
 
-            # === Center Layout for Download Button ===
-            left, center, right = st.columns([1, 2, 1])
-            with center:
-                import io
-                sample_data = pd.DataFrame(columns=[
-                    "User", "Exchange", "Strategy", "Symbol", "Ser_Exp", "NetQty", "NetVal", "Nse_close"
-                ])
-                csv_buffer = io.StringIO()
-                sample_data.to_csv(csv_buffer, index=False)
-
-                st.markdown(
-                    "<div style='text-align:center;margin-top:20px;font-family:Cambria;'>"
-                    "<h4 style='color:#00BFFF;margin-bottom:10px;'>📥 Download Sample CSV Format</h4>"
-                    "</div>",
-                    unsafe_allow_html=True
-                )
-
-                st.download_button(
-                    label="⬇️ Download CSV Template",
-                    data=csv_buffer.getvalue(),
-                    file_name="MTM_Sample_Format.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                    help="Download this blank template and paste your data."
-                )
-
-            st.stop()
+        df_csv = pd.read_csv(self.csv_path)
         df_tsv = self.load_local_file()
         merged = self.merge_and_adjust(df_tsv, df_csv)
 
@@ -493,7 +423,7 @@ class LiveMTMDashboard:
         if "active_tab" not in st.session_state:
             st.session_state["active_tab"] = "Portfolio"
 
-        tab_labels = ["📋 Portfolio Table", "📊 Trading Chart", "👥 User Portfolio View"]
+        tab_labels = ["👥 User Portfolio View", "📊 Trading Chart","📋 Portfolio Table"]
 
         # === Tab Selector (persistent across reruns) ===
         selected_tab = st.radio(
@@ -562,6 +492,7 @@ class LiveMTMDashboard:
 
             # === Show the styled table ===
             st.dataframe(styled_df, use_container_width=True)
+
         # === Trading Chart Tab ===
         elif st.session_state["active_tab"] == "Chart":
             st.markdown("<h4 style='text-align:center;font-family:Cambria;font-size:18px;'>📋 Portfolio Table</h4>", unsafe_allow_html=True)
@@ -819,28 +750,25 @@ class LiveMTMDashboard:
         if refresh_time:
             st.experimental_rerun()
 
-import hashlib
-import json
 
-import hashlib
-import json
-from datetime import datetime
+
 import streamlit as st
-import os
+import json, os, hashlib
+import pandas as pd
+from datetime import datetime
 
-# === CONFIG ===
+# ====================== 🔐 LOGIN SYSTEM ======================
 USERS_FILE = "users.json"
 ADMIN_USER = "Harshal_admin"
 ADMIN_PASS = "Admin.1221"
 ADMIN_HASH = hashlib.sha256(ADMIN_PASS.encode()).hexdigest()
 
 
-# --- Helper: hash passwords securely ---
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
 
-# --- Load or initialize users ---
+# Load or init users
 if os.path.exists(USERS_FILE):
     with open(USERS_FILE, "r") as f:
         try:
@@ -850,7 +778,7 @@ if os.path.exists(USERS_FILE):
 else:
     USERS = {}
 
-# --- Ensure default admin exists ---
+# Ensure admin exists
 if (ADMIN_USER not in USERS) or (USERS[ADMIN_USER]["password"] != ADMIN_HASH):
     USERS[ADMIN_USER] = {
         "password": ADMIN_HASH,
@@ -861,35 +789,29 @@ if (ADMIN_USER not in USERS) or (USERS[ADMIN_USER]["password"] != ADMIN_HASH):
         json.dump(USERS, f, indent=4)
 
 
-# --- Helper: save updated users ---
 def save_users():
     with open(USERS_FILE, "w") as f:
         json.dump(USERS, f, indent=4)
 
 
-# --- Session setup ---
+# Session
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
     st.session_state["username"] = None
     st.session_state["role"] = None
 
-
-# === LOGIN SCREEN ===
+# ====================== 🔑 LOGIN SCREEN ======================
 if not st.session_state["authenticated"]:
     st.set_page_config(page_title="🔒 Login - Live MTM Dashboard", layout="centered")
 
     st.markdown("""
-        <h2 style='text-align:center;font-family:Cambria;margin-bottom:10px;'>🔐 Secure Access</h2>
-        <p style='text-align:center;color:#aaa;font-family:Cambria;font-size:15px;'>
-            Enter your username and password to access the dashboard
-        </p>
+        <h2 style='text-align:center;font-family:Cambria;'>🔐 Secure Login</h2>
+        <p style='text-align:center;color:#aaa;'>Enter your username and password</p>
     """, unsafe_allow_html=True)
 
-    username = st.text_input("👤 Username", placeholder="Enter your username", key="login_user")
-    password = st.text_input("🔑 Password", placeholder="Enter your password", type="password", key="login_pass")
-    login_btn = st.button("Login")
-
-    if login_btn:
+    username = st.text_input("👤 Username")
+    password = st.text_input("🔑 Password", type="password")
+    if st.button("Login"):
         if username in USERS and USERS[username]["password"] == hash_password(password):
             st.session_state["authenticated"] = True
             st.session_state["username"] = username
@@ -899,48 +821,40 @@ if not st.session_state["authenticated"]:
         else:
             st.error("❌ Invalid username or password.")
 
-
-# === LOGGED-IN VIEW ===
+# ====================== AFTER LOGIN ======================
 else:
     st.sidebar.markdown(
-        f"<p style='font-family:Cambria;color:#aaa;font-size:15px;'>👤 Logged in as: "
-        f"<b>{st.session_state['username']}</b> ({st.session_state['role'].capitalize()})</p>",
+        f"<p style='font-family:Cambria;color:#aaa;'>👤 Logged in as: <b>{st.session_state['username']}</b> "
+        f"({st.session_state['role'].capitalize()})</p>",
         unsafe_allow_html=True
     )
 
-    # === ADMIN PANEL ===
+    # Logout
+    if st.sidebar.button("🚪 Logout"):
+        st.session_state["authenticated"] = False
+        st.session_state["username"] = None
+        st.session_state["role"] = None
+        st.rerun()
+
+    # ============ ADMIN PANEL ============
     if st.session_state["username"] == ADMIN_USER:
-        # --- Centered Admin Panel ---
         st.markdown("""
-            <h2 style='text-align:center;color:#00BFFF;font-family:Cambria;margin-top:5px;'>⚙️ Admin Control Panel</h2>
-            <p style='text-align:center;color:#aaa;font-family:Cambria;margin-bottom:20px;'>
-                Manage users, reset passwords, or remove accounts.
-            </p>
+            <h2 style='text-align:center;color:#00BFFF;font-family:Cambria;'>⚙️ Admin Panel</h2>
         """, unsafe_allow_html=True)
 
-        # === Center the content using columns ===
-        col_space_left, col_main, col_space_right = st.columns([1, 2, 1])
-        with col_main:
-            st.markdown("<div style='background-color:#111;padding:20px;border-radius:12px;'>", unsafe_allow_html=True)
-
-            action = st.radio(
-                "🧭 Choose Action",
-                ["➕ Add User", "♻️ Reset Password", "❌ Remove User", "👥 View Users"],
-                horizontal=True,
-                label_visibility="collapsed"
-            )
+        _, col, _ = st.columns([1, 2, 1])
+        with col:
+            action = st.radio("", ["➕ Add User", "♻️ Reset Password", "❌ Remove User", "👥 View Users"], horizontal=True)
             st.markdown("---")
 
-            # === Add User ===
             if action == "➕ Add User":
-                st.subheader("➕ Add New User")
-                new_user = st.text_input("👤 New Username", placeholder="Enter username")
-                new_pass = st.text_input("🔑 Password", placeholder="Enter password", type="password")
-                if st.button("Create User", use_container_width=True):
-                    if new_user == "" or new_pass == "":
-                        st.warning("⚠️ Username and password cannot be empty.")
+                new_user = st.text_input("👤 New Username")
+                new_pass = st.text_input("🔑 Password", type="password")
+                if st.button("Create User"):
+                    if not new_user or not new_pass:
+                        st.warning("⚠️ Fields cannot be empty.")
                     elif new_user in USERS:
-                        st.warning("⚠️ Username already exists.")
+                        st.warning("⚠️ User already exists.")
                     else:
                         USERS[new_user] = {
                             "password": hash_password(new_pass),
@@ -948,50 +862,81 @@ else:
                             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         }
                         save_users()
-                        st.success(f"✅ User '{new_user}' created successfully!")
+                        st.success(f"✅ User '{new_user}' created!")
 
-            # === Reset Password ===
             elif action == "♻️ Reset Password":
-                st.subheader("♻️ Reset User Password")
-                target_user = st.selectbox("Select User", [u for u in USERS.keys() if u != ADMIN_USER])
-                new_pass = st.text_input("🔑 New Password", type="password")
-                if st.button("Reset Password", use_container_width=True):
-                    USERS[target_user]["password"] = hash_password(new_pass)
+                user_sel = st.selectbox("Select user", [u for u in USERS.keys() if u != ADMIN_USER])
+                new_pass = st.text_input("New Password", type="password")
+                if st.button("Reset"):
+                    USERS[user_sel]["password"] = hash_password(new_pass)
                     save_users()
-                    st.success(f"🔐 Password reset for {target_user}")
+                    st.success(f"Password reset for {user_sel}")
 
-            # === Remove User ===
             elif action == "❌ Remove User":
-                st.subheader("🗑️ Remove User")
-                target_user = st.selectbox("Select User to Remove", [u for u in USERS.keys() if u != ADMIN_USER])
-                if st.button("Delete User", use_container_width=True):
-                    USERS.pop(target_user, None)
+                user_sel = st.selectbox("Select user", [u for u in USERS.keys() if u != ADMIN_USER])
+                if st.button("Delete User"):
+                    USERS.pop(user_sel)
                     save_users()
-                    st.success(f"🚮 User '{target_user}' deleted successfully.")
+                    st.success(f"User '{user_sel}' deleted")
                     st.rerun()
 
-            # === View Users ===
             elif action == "👥 View Users":
-                st.subheader("👥 Registered Users")
-                user_df = pd.DataFrame([
-                    {
-                        "Username": u,
-                        "Role": info.get("role", "user").capitalize(),
-                        "Created At": info.get("created_at", "Unknown")
-                    }
+                df = pd.DataFrame([
+                    {"Username": u, "Role": info.get("role", "user"), "Created": info.get("created_at")}
                     for u, info in USERS.items()
                 ])
-                st.dataframe(user_df, use_container_width=True, height=300)
+                st.dataframe(df, use_container_width=True)
 
-            st.markdown("</div>", unsafe_allow_html=True)
+    # ================= DEMO CSV + UPLOAD =================
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📂 Upload Portfolio CSV")
 
-    # === LOGOUT BUTTON ===
-    if st.sidebar.button("🚪 Logout"):
-        st.session_state["authenticated"] = False
-        st.session_state["username"] = None
-        st.session_state["role"] = None
-        st.rerun()
+    # Demo CSV to download
+    demo_data = pd.DataFrame({
+        "User": ["12345", "B2005"],
+        "Symbol": ["TCS", "INFY"],
+        "Exchange": ["NSE", "NSE"],
+        "Ser_Exp": ["EQ", "EQ"],
+        "NetQty": [100, 50],
+        "NetVal": [325000, 190000],
+        "Nse_close": [3250.5, 3799.3],
+        "Strategy": ["Chart", "Chart"]
+    })
+    st.sidebar.download_button("⬇️ Download Demo CSV", demo_data.to_csv(index=False), "demo_portfolio.csv")
 
-    # === MAIN DASHBOARD ===
-    app = LiveMTMDashboard()
-    app.run()
+    # Upload CSV
+    uploaded_csv = st.sidebar.file_uploader("Choose file", type=["csv"])
+
+    if not uploaded_csv:
+        st.info("👆 Please upload your portfolio CSV file to view dashboard.")
+        st.stop()
+
+    # ✅ Run your LiveMTMDashboard class after file upload
+    import pandas as pd
+    import io
+
+    try:
+        # Make a fresh copy of uploaded file before reading
+        uploaded_bytes = uploaded_csv.getvalue()
+
+        # 1️⃣ Try reading it once for validation
+        df_test = pd.read_csv(io.BytesIO(uploaded_bytes))
+        if df_test.empty:
+            st.error("⚠️ Uploaded CSV is empty. Please check file content.")
+            st.stop()
+
+        # 2️⃣ Now give a fresh copy to dashboard
+        csv_copy = io.BytesIO(uploaded_bytes)
+
+        # Create dashboard instance
+        app = LiveMTMDashboard()
+        app.csv_path = csv_copy  # give the copy so it's readable inside class
+        app.run()
+
+    except pd.errors.EmptyDataError:
+        st.error("⚠️ Uploaded file is empty or invalid CSV format.")
+    except pd.errors.ParserError:
+        st.error("⚠️ Unable to parse CSV. Please check the file format (comma-separated).")
+    except Exception as e:
+        st.error(f"⚠️ Error running dashboard: {e}")
+
